@@ -1,50 +1,69 @@
 apiVersion: triggers.tekton.dev/v1alpha1
 kind: TriggerBinding
 metadata:
-  name: github-binding
+  name: tb-github                        # Binding para eventos de GitHub
+  namespace: tekton-pipelines
 spec:
   params:
-    - name: git-url
-      value: $(body.repository.clone_url)
-    - name: git-revision
-      value: $(body.head_commit.id)
+  - name: gitrepositoryurl
+    value: $(body.repository.clone_url)  # Extrae la URL del repo del payload JSON
+  - name: gitrevision
+    value: $(body.after)                 # Extrae el SHA del commit (en eventos "push")
+  - name: gitref
+    value: $(body.ref)                   # Extrae la referencia (ej: "refs/heads/main")
 ---
 apiVersion: triggers.tekton.dev/v1alpha1
 kind: TriggerTemplate
 metadata:
-  name: github-template
+  name: tt-github
+  namespace: tekton-pipelines
 spec:
   params:
-    - name: git-url
-    - name: git-revision
+  - name: gitrepositoryurl
+  - name: gitrevision
+  - name: gitref
   resourcetemplates:
-    - apiVersion: tekton.dev/v1beta1
-      kind: PipelineRun
-      metadata:
-        generateName: demo-pipeline-run-
-      spec:
-        pipelineRef:
-          name: demo-pipeline
-        params:
-          - name: git-url
-            value: $(tt.params.git-url)
-          - name: git-revision
-            value: $(tt.params.git-revision)
-          - name: image-name
-            value: localhost:32000/demo-microservice:latest
-        workspaces:
-          - name: shared-workspace
-            emptyDir: {}
+  - apiVersion: tekton.dev/v1beta1
+    kind: PipelineRun
+    metadata:
+      generateName: demo-pipeline-run-   # Tekton generará un nombre único para la PipelineRun
+      namespace: tekton-pipelines
+    spec:
+      serviceAccountName: tekton-pipelines   # ServiceAccount con permisos de ejecutar pipeline (y despliegue)
+      pipelineRef:
+        name: demo-pipeline             # Referencia a la pipeline definida anteriormente
+      params:
+      - name: git-url
+        value: $(tt.params.gitrepositoryurl)
+      - name: git-revision
+        value: $(tt.params.gitrevision)
+      - name: image-name
+        value: "localhost:32000/demo-microservice:latest"
+      workspaces:
+      - name: shared-workspace
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 1Gi           # Se crea un PVC dinámico para compartir datos entre Tasks
 ---
 apiVersion: triggers.tekton.dev/v1alpha1
 kind: EventListener
 metadata:
-  name: github-listener
+  name: el-github
+  namespace: tekton-pipelines
 spec:
-  serviceAccountName: tekton-triggers-sa
+  serviceAccountName: tekton-triggers-sa    # SA que ejecutará el EventListener Pod
   triggers:
-    - name: github-trigger
-      bindings:
-        - ref: github-binding
-      template:
-        ref: github-template
+  - name: github-trigger
+    interceptors:
+    - github:
+        secretRef:
+          secretName: github-webhook-secret   # Referencia a un Secret con la clave del webhook (X-Hub-Signature)
+          secretKey: secretToken
+        eventTypes: ["push", "pull_request"]  # Tipos de eventos GitHub a los que reaccionar
+    bindings:
+      - ref: tb-github
+    template:
+      ref: tt-github

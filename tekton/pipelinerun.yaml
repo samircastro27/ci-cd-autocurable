@@ -1,0 +1,24 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  generateName: demo-pipeline-run-
+  namespace: tekton-pipelines
+spec:
+  pipelineRef:
+    name: demo-pipeline
+  serviceAccountName: tekton-pipelines
+  params:
+    - name: git-url
+      value: https://github.com/samircastro27/tu-repo.git
+    - name: git-revision
+      value: main
+    - name: image-name
+      value: cuembybot/demo-microservice:latest
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi

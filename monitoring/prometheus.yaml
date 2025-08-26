@@ -2,56 +2,75 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prometheus-config
-  labels:
-    name: prometheus-config
+  namespace: monitoring
 data:
   prometheus.yml: |
     global:
       scrape_interval: 15s
     scrape_configs:
-      - job_name: 'microservice'
-        static_configs:
-          - targets: ['demo-microservice:8080']
-      - job_name: 'operator'
-        static_configs:
-          - targets: ['healing-policy-operator:8080']
+      - job_name: 'tekton'
+        metrics_path: /metrics
+        kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names: ['tekton-pipelines']
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name]
+          action: keep
+          regex: tekton-pipelines-controller
+      - job_name: 'demo-microservice'
+        metrics_path: /metrics
+        kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names: ['default']
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name]
+          action: keep
+          regex: demo-microservice
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: prometheus
+  name: prometheus-service
+  namespace: monitoring
 spec:
-  selector:
-    app: prometheus
+  type: ClusterIP
+  selector: { app: prometheus }
   ports:
-    - port: 9090
+    - name: web
+      port: 9090
       targetPort: 9090
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: prometheus
+  name: prometheus-server
+  namespace: monitoring
 spec:
   replicas: 1
   selector:
-    matchLabels:
-      app: prometheus
+    matchLabels: { app: prometheus }
   template:
     metadata:
-      labels:
-        app: prometheus
+      labels: { app: prometheus }
     spec:
       containers:
-        - name: prometheus
-          image: prom/prometheus:latest
-          args:
-            - "--config.file=/etc/prometheus/prometheus.yml"
-          ports:
-            - containerPort: 9090
-          volumeMounts:
-            - name: config-volume
-              mountPath: /etc/prometheus/
-      volumes:
+      - name: prometheus
+        image: prom/prometheus:v2.41.0
+        args:
+        - "--config.file=/etc/prometheus/prometheus.yml"
+        - "--storage.tsdb.path=/prometheus"
+        ports:
+        - containerPort: 9090
+        volumeMounts:
         - name: config-volume
-          configMap:
-            name: prometheus-config
+          mountPath: /etc/prometheus
+        - name: data-volume
+          mountPath: /prometheus
+      volumes:
+      - name: config-volume
+        configMap:
+          name: prometheus-config
+      - name: data-volume
+        emptyDir: {}

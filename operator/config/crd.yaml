@@ -1,17 +1,11 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: healingpolicies.demo.kcd
+  name: healingpolicies.demo.kcd2025   # plural CRD name
 spec:
-  group: demo.kcd
-  names:
-    kind: HealingPolicy
-    listKind: HealingPolicyList
-    plural: healingpolicies
-    singular: healingpolicy
-  scope: Namespaced
+  group: demo.kcd2025                  # grupo API personalizado
   versions:
-    - name: v1
+    - name: v1alpha1
       served: true
       storage: true
       schema:
@@ -21,9 +15,28 @@ spec:
             spec:
               type: object
               properties:
-                maxLatencySeconds:
-                  type: number
-                maxErrorRate:
-                  type: number
-                action:
+                pipelineName:
                   type: string
+                pipelineNamespace:
+                  type: string
+                deploymentName:
+                  type: string
+                deploymentNamespace:
+                  type: string
+                latencyThresholdSeconds:
+                  type: number
+                errorRateThreshold:
+                  type: number
+            status:
+              type: object
+              properties:
+                lastAction:
+                  type: string
+                message:
+                  type: string
+  scope: Namespaced
+  names:
+    kind: HealingPolicy
+    plural: healingpolicies
+    singular: healingpolicy
+    shortNames: [ "hp" ]

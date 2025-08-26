@@ -1,8 +1,12 @@
-apiVersion: demo.kcd/v1
+apiVersion: demo.kcd2025/v1alpha1
 kind: HealingPolicy
 metadata:
-  name: demo-healing-policy
+  name: demo-healingpolicy
+  namespace: demokcd2025
 spec:
-  maxLatencySeconds: 0.5
-  maxErrorRate: 0.2
-  action: restart
+  pipelineName: "demo-pipeline"
+  pipelineNamespace: "default"
+  deploymentName: "demo-microservice"
+  deploymentNamespace: "default"
+  latencyThresholdSeconds: 0.5      # 500 ms umbral de latencia
+  errorRateThreshold: 0.1           # 10% de errores como umbral

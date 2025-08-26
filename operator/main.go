@@ -1,91 +1,143 @@
-package main
+package controllers
 
 import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "net/http"
-    "os"
-    "time"
+	"context"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
-    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-    "k8s.io/client-go/dynamic"
-    "k8s.io/client-go/rest"
-    "k8s.io/apimachinery/pkg/runtime/schema"
+	// Importar paquetes de k8s, Tekton y esquema API de HealingPolicy
+	tektonv1beta1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+
+	// suponiendo que healingpolicy_types.go generó paquete demo.kcd2025/v1alpha1
+	demov1alpha1 "github.com/samircastro27/operator/api/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type Metrics struct {
-    ErrorRate float64
-    Latency float64
+// HealingPolicyReconciler reconcilia objetos HealingPolicy
+type HealingPolicyReconciler struct {
+	client.Client
+	// normalmente incluiría Scheme, Log, etc.
 }
 
-func fetchMetrics() (Metrics, error) {
-    resp, err := http.Get("http://demo-microservice:8080/metrics")
-    if err != nil {
-        return Metrics{}, err
-    }
-    defer resp.Body.Close()
-
-    var m Metrics
-    var errors, requests, duration float64
-
-    var line string
-    for {
-        _, err := fmt.Fscanf(resp.Body, "%s %f\n", &line, &duration)
-        if err != nil {
-            break
-        }
-        if line == "demo_errors_total" {
-            errors = duration
-        } else if line == "demo_requests_total" {
-            requests = duration
-        } else if line == "demo_last_request_duration_seconds" {
-            m.Latency = duration
-        }
-    }
-    if requests > 0 {
-        m.ErrorRate = errors / requests
-    }
-    return m, nil
+// parseMetricValue busca una métrica por nombre en el texto de métricas y devuelve su valor (float64)
+func parseMetricValue(metricsText string, metricName string) float64 {
+	for _, line := range strings.Split(metricsText, "\n") {
+		if strings.HasPrefix(line, metricName+" ") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				if val, err := strconv.ParseFloat(fields[1], 64); err == nil {
+					return val
+				}
+			}
+		}
+	}
+	return 0.0
 }
 
-func main() {
-    config, _ := rest.InClusterConfig()
-    dynClient, _ := dynamic.NewForConfig(config)
-    gvr := schema.GroupVersionResource{
-        Group: "demo.kcd",
-        Version: "v1",
-        Resource: "healingpolicies",
-    }
+func (r *HealingPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// 1. Obtener el objeto HealingPolicy actual
+	var policy demov1alpha1.HealingPolicy
+	if err := r.Get(ctx, req.NamespacedName, &policy); err != nil {
+		// Si fue borrado, no hay nada que hacer
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
-    for {
-        list, _ := dynClient.Resource(gvr).Namespace("default").List(context.TODO(), metav1.ListOptions{})
-        metrics, err := fetchMetrics()
-        if err != nil {
-            fmt.Println("Error obteniendo métricas:", err)
-            continue
-        }
+	// Extraer especificaciones para fácil acceso
+	hp := policy.Spec
+	pipelineName := hp.PipelineName
+	pipelineNS := hp.PipelineNamespace
+	deployName := hp.DeploymentName
+	deployNS := hp.DeploymentNamespace
 
-        for _, item := range list.Items {
-            spec := item.Object["spec"].(map[string]interface{})
-            action := spec["action"].(string)
-            maxLat := spec["maxLatencySeconds"].(float64)
-            maxErr := spec["maxErrorRate"].(float64)
+	// 2. Listar PipelineRuns de Tekton en el namespace objetivo, filtrando por pipelineName
+	var prList tektonv1beta1.PipelineRunList
+	if err := r.List(ctx, &prList, client.InNamespace(pipelineNS)); err == nil {
+		for _, pr := range prList.Items {
+			if pr.Spec.PipelineRef != nil && pr.Spec.PipelineRef.Name == pipelineName {
+				// Hallamos un PipelineRun de nuestra pipeline objetivo
+				for _, cond := range pr.Status.Conditions {
+					if cond.Type == "Succeeded" && cond.Status == corev1.ConditionFalse {
+						// La condición Succeeded es False => PipelineRun falló
+						fmt.Printf("[HealingPolicy] PipelineRun fallida detectada: %s (razón: %s)\n", pr.Name, cond.Reason)
+						// Verificar que no haya sido ya re-ejecutada (podríamos marcar en status, pero omitir en demo)
+						// 3. Crear un nuevo PipelineRun para reintentar la pipeline
+						newPR := tektonv1beta1.PipelineRun{
+							ObjectMeta: ctrl.ObjectMeta{
+								GenerateName: pipelineName + "-retry-",
+								Namespace:    pipelineNS,
+							},
+							Spec: tektonv1beta1.PipelineRunSpec{
+								PipelineRef: &tektonv1beta1.PipelineRef{Name: pipelineName},
+								// Podríamos pasar mismos params que el PR original si queremos reintentar misma commit.
+								// Simplificamos usando misma pipeline con parámetros por defecto o fijos.
+							},
+						}
+						if err := r.Create(ctx, &newPR); err != nil {
+							fmt.Printf("Error re-creando PipelineRun: %v\n", err)
+						} else {
+							fmt.Printf("[HealingPolicy] Reejecutada PipelineRun nueva: %s\n", newPR.Name)
+						}
+					}
+				}
+			}
+		}
+	}
 
-            fmt.Printf("Métricas actuales: latency=%.2f, errorRate=%.2f\n", metrics.Latency, metrics.ErrorRate)
+	// 4. Obtener métricas actuales del microservicio desde Prometheus o directamente vía HTTP
+	metricsURL := fmt.Sprintf("http://%s.%s.svc:8080/metrics", deployName, deployNS)
+	resp, err := http.Get(metricsURL)
+	if err != nil {
+		fmt.Printf("No se pudo obtener métricas de %s: %v\n", metricsURL, err)
+	} else {
+		defer resp.Body.Close()
+		body, _ := ioutil.ReadAll(resp.Body)
+		metricsText := string(body)
+		// 5. Parsear métricas relevantes
+		totalReq := parseMetricValue(metricsText, "demo_requests_total")
+		totalErr := parseMetricValue(metricsText, "demo_errors_total")
+		lastLat := parseMetricValue(metricsText, "demo_last_request_duration_seconds")
 
-            if metrics.Latency > maxLat || metrics.ErrorRate > maxErr {
-                fmt.Println("🔁 Ejecutando acción:", action)
-                switch action {
-                case "restart":
-                    os.system("kubectl rollout restart deployment demo-microservice")
-                case "scale":
-                    os.system("kubectl scale deployment demo-microservice --replicas=3")
-                case "alert":
-                    fmt.Println("⚠️ Alerta: se excedieron los límites")
-                }
-            }
-        }
-        time.Sleep(30 * time.Second)
-    }
+		var currentErrorRate float64 = 0.0
+		if totalReq > 0 {
+			currentErrorRate = totalErr / totalReq
+		}
+
+		fmt.Printf("[HealingPolicy] Métricas actuales -> requests: %.0f, errors: %.0f, lastLatency: %.3fs, errorRate: %.2f%%\n",
+			totalReq, totalErr, lastLat, currentErrorRate*100)
+
+		// 6. Verificar umbral de latencia
+		if hp.LatencyThresholdSeconds > 0 && lastLat > hp.LatencyThresholdSeconds {
+			// Necesario escalar
+			var deploy appsv1.Deployment
+			if err := r.Get(ctx, client.ObjectKey{Name: deployName, Namespace: deployNS}, &deploy); err == nil {
+				// Aumentar replicas en 1 (también podríamos duplicar, o usar un max definido)
+				desired := *deploy.Spec.Replicas + 1
+				deploy.Spec.Replicas = &desired
+				if err := r.Update(ctx, &deploy); err != nil {
+					fmt.Printf("Error escalando deployment: %v\n", err)
+				} else {
+					fmt.Printf("[HealingPolicy] Latencia %.3fs > %.3fs umbral. Réplicas de %s escaladas a %d\n",
+						lastLat, hp.LatencyThresholdSeconds, deployName, desired)
+				}
+			}
+		}
+
+		// 7. Verificar umbral de error rate (SLO de errores)
+		if hp.ErrorRateThreshold > 0 && currentErrorRate > hp.ErrorRateThreshold {
+			// Enviar alerta (aquí simulamos con un log)
+			fmt.Printf("[HealingPolicy][ALERTA] Tasa de error actual %.2f%% excede umbral de %.2f%%\n",
+				currentErrorRate*100, hp.ErrorRateThreshold*100)
+			// (Opcional: también podríamos escalar el Deployment en caso de alto error rate)
+		}
+	}
+
+	// 8. Programar próxima reconciliación periódica (por ejemplo en 30s) para seguir monitoreando continuamente
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }

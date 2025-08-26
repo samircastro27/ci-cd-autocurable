@@ -2,62 +2,79 @@ apiVersion: tekton.dev/v1beta1
 kind: Pipeline
 metadata:
   name: demo-pipeline
+  namespace: tekton-pipelines
 spec:
   params:
-    - name: git-url
-      type: string
-    - name: git-revision
-      type: string
-    - name: image-name
-      type: string
+  - name: git-url
+    type: string
+    description: Repositorio Git con el código fuente
+  - name: git-revision
+    type: string
+    description: Referencia de Git (rama o commit) a construir
+    default: "main"
+  - name: image-name
+    type: string
+    description: Nombre de la imagen de contenedor a producir (incluyendo tag)
   workspaces:
-    - name: shared-workspace
+  - name: shared-workspace     # workspace compartido entre tareas (código fuente, etc.)
   tasks:
-    - name: fetch-source
-      taskRef:
-        name: git-clone
-      workspaces:
-        - name: output
-          workspace: shared-workspace
-      params:
-        - name: url
-          value: $(params.git-url)
-        - name: revision
-          value: $(params.git-revision)
-        - name: deleteExisting
-          value: "true"
-
-    - name: run-tests
-      runAfter: ["fetch-source"]
-      taskSpec:
-        workspaces:
-          - name: shared-workspace
-        steps:
-          - name: test
-            image: golang:1.20
-            workingDir: /workspace/shared-workspace
-            script: |
-              #!/bin/sh
-              go mod tidy
-              go test ./... -v
-
-    - name: build-image
-      runAfter: ["run-tests"]
-      taskRef:
-        name: kaniko
-      workspaces:
-        - name: source
-          workspace: shared-workspace
-      params:
-        - name: IMAGE
-          value: $(params.image-name)
-
-    - name: deploy
-      runAfter: ["build-image"]
-      taskSpec:
-        steps:
-          - name: rollout
-            image: bitnami/kubectl:latest
-            script: |
-              #!/bin/sh
-              kubectl rollout restart deployment/demo-microservice
+  - name: fetch-source         # Tarea 1: clonar el repositorio Git
+    taskRef:
+      name: git-clone          # Usa tarea "git-clone" del catálogo de Tekton
+      kind: Task
+    workspaces:
+    - name: output
+      workspace: shared-workspace
+    params:
+    - name: url
+      value: $(params.git-url)           # URL del repo (pasado como parámetro)
+    - name: revision
+      value: $(params.git-revision)      # Rama/commit (por defecto "main")
+    - name: deleteExisting
+      value: "true"                     # limpiar contenido previo del workspace
+  - name: run-tests            # Tarea 2: ejecutar pruebas unitarias
+    runAfter: ["fetch-source"]          # depende de haber clonado el código
+    taskSpec:                            # Definimos la tarea inline (usando taskSpec)
+      steps:
+      - name: tests
+        image: golang:1.20              # usamos imagen Go oficial para correr pruebas
+        workingDir: /workspace/shared-workspace   # el código clonado está en este workspace
+        script: |
+          #!/usr/bin/env bash
+          go mod tidy  # asegurar dependencias
+          echo "== Ejecutando tests =="
+          go test ./... -v
+    workspaces:
+    - name: shared-workspace
+      workspace: shared-workspace
+  - name: build-image          # Tarea 3: construir y push de la imagen Docker
+    runAfter: ["run-tests"]
+    taskRef:
+      name: kaniko             # Usa tarea "kaniko" del catálogo Tekton (Buildah/Kaniko)
+      kind: Task
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+    - name: dockerconfig
+      workspace: shared-workspace   # (opcional, si se requiere credencial Docker)
+    params:
+    - name: IMAGE
+      value: $(params.image-name)   # nombre de la imagen (incluye registro/tag)
+    # Nota: Se asume que la tarea Kaniko está configurada para usar el Dockerfile en el workspace
+    # y que no se requiere autenticación para el registro destino (ej: registro local de MicroK8s).
+  - name: deploy
+    runAfter: ["build-image"]   # Tarea 4: desplegar la nueva versión
+    taskSpec:
+      steps:
+      - name: deploy
+        image: bitnami/kubectl:latest   # imagen ligera con kubectl 
+        env:
+        - name: KUBECONFIG
+          value: /tekton/home/.kube/config   # Tekton montará el kubeconfig del ServiceAccount aquí
+        script: |
+          #!/usr/bin/env bash
+          echo "== Desplegando nueva versión =="
+          # Opción A: Reiniciar pods del deployment para recargar la última imagen
+          kubectl rollout restart deployment/demo-microservice -n default
+          # Opción B: Aplicar manifestos (ej. si se quisiera crear recursos nuevos)
+          # kubectl apply -f /workspace/shared-workspace/microservice/k8s/deployment.yaml
