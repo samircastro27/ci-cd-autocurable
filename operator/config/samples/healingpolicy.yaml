@@ -1,0 +1,8 @@
+apiVersion: demo.kcd/v1
+kind: HealingPolicy
+metadata:
+  name: demo-healing-policy
+spec:
+  maxLatencySeconds: 0.5
+  maxErrorRate: 0.2
+  action: restart

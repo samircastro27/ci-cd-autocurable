@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-microservice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-microservice
+  template:
+    metadata:
+      labels:
+        app: demo-microservice
+    spec:
+      containers:
+      - name: app
+        image: localhost:32000/demo-microservice:latest
+        ports:
+        - containerPort: 8080
+        imagePullPolicy: Always
