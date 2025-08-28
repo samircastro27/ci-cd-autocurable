@@ -139,7 +139,4 @@ spec:
         - "--context=/workspace/source/microservice"
         - "--destination=$(params.IMAGE)"
         - "--digest-file=/tekton/results/IMAGE_DIGEST"
-      volumeMounts:
-        - name: docker-config
-          mountPath: /kaniko/.docker
 ---
