@@ -1,0 +1,27 @@
+name: Trigger Tekton Webhook
+
+on:
+  workflow_dispatch:     # para dispararlo manualmente desde la UI de GitHub
+  push:                  # o también al hacer push
+    branches:
+      - main
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (opcional)
+        uses: actions/checkout@v3
+
+      - name: Simular Webhook de GitHub
+        run: |
+          curl -X POST https://1fcbe53f824a.ngrok-free.app \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: push" \
+            --data '{
+              "ref": "refs/heads/main",
+              "after": "0000000000000000000000000000000000000000",
+              "repository": {
+                "clone_url": "https://github.com/samircastro27/ci-cd-autocurable.git"
+              }
+            }'

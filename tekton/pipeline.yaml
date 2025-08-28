@@ -15,6 +15,10 @@ spec:
   - name: image-name
     type: string
     description: Nombre de la imagen de contenedor a producir (incluyendo tag)
+  - name: DOCKERFILE
+    type: string
+    description: Ruta al Dockerfile dentro del repositorio
+    default: "./Dockerfile"
   workspaces:
   - name: shared-workspace     # workspace compartido entre tareas (código fuente, etc.)
   tasks:
@@ -41,7 +45,9 @@ spec:
         workingDir: /workspace/shared-workspace   # el código clonado está en este workspace
         script: |
           #!/usr/bin/env bash
-          go mod tidy  # asegurar dependencias
+          cd microservice
+          echo "== Instalando dependencias =="
+          go mod tidy
           echo "== Ejecutando tests =="
           go test ./... -v
     workspaces:
@@ -60,6 +66,8 @@ spec:
     params:
     - name: IMAGE
       value: $(params.image-name)   # nombre de la imagen (incluye registro/tag)
+    - name: DOCKERFILE
+      value: $(params.DOCKERFILE)   # ruta al Dockerfile en el repo
     # Nota: Se asume que la tarea Kaniko está configurada para usar el Dockerfile en el workspace
     # y que no se requiere autenticación para el registro destino (ej: registro local de MicroK8s).
   - name: deploy
@@ -75,6 +83,67 @@ spec:
           #!/usr/bin/env bash
           echo "== Desplegando nueva versión =="
           # Opción A: Reiniciar pods del deployment para recargar la última imagen
-          kubectl rollout restart deployment/demo-microservice -n default
+          kubectl rollout restart deployment/demo-microservice -n demokcd2025
           # Opción B: Aplicar manifestos (ej. si se quisiera crear recursos nuevos)
           # kubectl apply -f /workspace/shared-workspace/microservice/k8s/deployment.yaml
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: docker-config
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/name: tekton-pipelines
+    app.kubernetes.io/component: tekton-pipelines
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: ewogICJhdXRocyI6IHsKICAgICJodHRwczovL2luZGV4LmRvY2tlci5pby92MS8iOiB7CiAgICAgICJ1c2VybmFtZSI6ICJjdWVtYnlib3QiLAogICAgICAicGFzc3dvcmQiOiAiNkpYVGRWbWIyUiMyYTRHJjNEKSp1VnEleUhkQTt4VTciLAogICAgICAiYXV0aCI6ICJZM1ZsYldKNVltOTBPalpLV0ZSa1ZtMWlNbElqTW1FMFJ5WXpSQ2txZFZaeEpYbElaRUU3ZUZVMyIKICAgIH0KICB9Cn0=
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tekton-pipelines
+  namespace: tekton-pipelines
+secrets:
+  - name: docker-config
+imagePullSecrets:
+  - name: docker-config
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: kaniko
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: IMAGE
+      type: string
+    - name: DOCKERFILE
+      type: string
+      default: ./Dockerfile
+  workspaces:
+    - name: source
+    - name: dockerconfig
+  steps:
+    - name: build-and-push
+      image: gcr.io/kaniko-project/executor:v1.5.1
+      workingDir: /workspace/source
+      env:
+        - name: DOCKER_CONFIG
+          value: /kaniko/.docker
+      command:
+        - /kaniko/executor
+      args:
+        - "--dockerfile=$(params.DOCKERFILE)"
+        - "--context=/workspace/source/microservice"
+        - "--destination=$(params.IMAGE)"
+        - "--digest-file=/tekton/results/IMAGE_DIGEST"
+      volumeMounts:
+        - name: docker-config
+          mountPath: /kaniko/.docker
+  volumes:
+    - name: docker-config
+      secret:
+        secretName: docker-config
+---

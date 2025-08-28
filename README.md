@@ -62,6 +62,10 @@ kubectl apply -f k8s/
 ```bash
 kubectl apply -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
+kubectl apply -n tekton-pipelines -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/git-clone/0.10/git-clone.yaml
+kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/kaniko/0.6/kaniko.yaml -n tekton-pipelines
+
+
 
 kubectl apply -f tekton/pipeline.yaml
 kubectl apply -f tekton/triggers.yaml

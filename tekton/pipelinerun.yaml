@@ -1,7 +1,7 @@
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  generateName: demo-pipeline-run-
+  name: demo-pipeline-run
   namespace: tekton-pipelines
 spec:
   pipelineRef:
@@ -9,11 +9,13 @@ spec:
   serviceAccountName: tekton-pipelines
   params:
     - name: git-url
-      value: https://github.com/samircastro27/tu-repo.git
+      value: https://github.com/samircastro27/ci-cd-autocurable.git
     - name: git-revision
       value: main
     - name: image-name
       value: cuembybot/demo-microservice:latest
+    - name: DOCKERFILE
+      value: ./microservice/Dockerfile
   workspaces:
     - name: shared-workspace
       volumeClaimTemplate:
