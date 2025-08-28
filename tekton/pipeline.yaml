@@ -131,7 +131,7 @@ spec:
       workingDir: /workspace/source
       env:
         - name: DOCKER_CONFIG
-          value: /kaniko/.docker
+          value: /workspace/dockerconfig
       command:
         - /kaniko/executor
       args:
