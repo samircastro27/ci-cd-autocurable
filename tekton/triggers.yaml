@@ -50,8 +50,7 @@ spec:
               requests:
                 storage: 1Gi           # Se crea un PVC dinámico para compartir datos entre Tasks
       - name: dockerconfig
-        secret:
-          secretName: docker-config
+        emptyDir: {}
 ---
 apiVersion: triggers.tekton.dev/v1alpha1
 kind: EventListener
