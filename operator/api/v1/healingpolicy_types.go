@@ -14,6 +14,7 @@ type HealingPolicySpec struct {
 type HealingPolicyStatus struct {
     LastChecked metav1.Time `json:"lastChecked,omitempty"`
     LastAction  string      `json:"lastAction,omitempty"`
+    RetryCount int `json:"retryCount,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: healing-operator
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: healing-operator
+  namespace: healing-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: healing-operator
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get","list","watch","update","patch"]
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelineruns"]
+    verbs: ["get","list","watch","create","update","patch"]
+  - apiGroups: ["demo.kcd2025"]
+    resources: ["healingpolicies","healingpolicies/status"]
+    verbs: ["get","list","watch","update","patch"]
+  - apiGroups: [""]
+    resources: ["pods","services"]
+    verbs: ["get","list","watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: healing-operator
+subjects:
+  - kind: ServiceAccount
+    name: healing-operator
+    namespace: healing-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: healing-operator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: healing-operator
+  namespace: healing-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: healing-operator }
+  template:
+    metadata:
+      labels: { app: healing-operator }
+    spec:
+      serviceAccountName: healing-operator
+      containers:
+        - name: operator
+          image: cuembybot/healing-operator:latest  
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { cpu: "500m", memory: "256Mi" }

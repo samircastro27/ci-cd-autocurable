@@ -133,6 +133,7 @@ spec:
       volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker
+          readOnly: true
   volumes:
     - name: docker-config
       secret:

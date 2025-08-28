@@ -1,4 +1,4 @@
-package controllers
+package main
 
 import (
 	"context"
@@ -9,21 +9,27 @@ import (
 	"strings"
 	"time"
 
-	// Importar paquetes de k8s, Tekton y esquema API de HealingPolicy
 	tektonv1beta1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	demov1alpha1 "github.com/samircastro27/operator/api/v1"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
-	// suponiendo que healingpolicy_types.go generó paquete demo.kcd2025/v1alpha1
-	demov1alpha1 "github.com/samircastro27/operator/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
+
+var scheme = runtime.NewScheme()
+
+const maxRetries = 5 // 👈 Límite de reintentos para la demo
 
 // HealingPolicyReconciler reconcilia objetos HealingPolicy
 type HealingPolicyReconciler struct {
 	client.Client
-	// normalmente incluiría Scheme, Log, etc.
 }
 
 // parseMetricValue busca una métrica por nombre en el texto de métricas y devuelve su valor (float64)
@@ -42,64 +48,83 @@ func parseMetricValue(metricsText string, metricName string) float64 {
 }
 
 func (r *HealingPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	// 1. Obtener el objeto HealingPolicy actual
+	// 1) Obtener HealingPolicy
 	var policy demov1alpha1.HealingPolicy
 	if err := r.Get(ctx, req.NamespacedName, &policy); err != nil {
-		// Si fue borrado, no hay nada que hacer
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Extraer especificaciones para fácil acceso
+	// 2) Si ya alcanzamos el máximo de reintentos, no crear más
+	if policy.Status.RetryCount >= maxRetries {
+		fmt.Printf("[HealingPolicy] Max retries (%d) alcanzado; no se crearán más PipelineRuns para %s/%s\n",
+			maxRetries, policy.Namespace, policy.Name)
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	}
+
+	// 3) Extraer especificaciones
 	hp := policy.Spec
 	pipelineName := hp.PipelineName
 	pipelineNS := hp.PipelineNamespace
 	deployName := hp.DeploymentName
 	deployNS := hp.DeploymentNamespace
 
-	// 2. Listar PipelineRuns de Tekton en el namespace objetivo, filtrando por pipelineName
+	// 4) Buscar PipelineRuns relacionados y actuar según su estado
 	var prList tektonv1beta1.PipelineRunList
 	if err := r.List(ctx, &prList, client.InNamespace(pipelineNS)); err == nil {
 		for _, pr := range prList.Items {
-			if pr.Spec.PipelineRef != nil && pr.Spec.PipelineRef.Name == pipelineName {
-				// Hallamos un PipelineRun de nuestra pipeline objetivo
-				for _, cond := range pr.Status.Conditions {
-					if cond.Type == "Succeeded" && cond.Status == corev1.ConditionFalse {
-						// La condición Succeeded es False => PipelineRun falló
-						fmt.Printf("[HealingPolicy] PipelineRun fallida detectada: %s (razón: %s)\n", pr.Name, cond.Reason)
-						// Verificar que no haya sido ya re-ejecutada (podríamos marcar en status, pero omitir en demo)
-						// 3. Crear un nuevo PipelineRun para reintentar la pipeline
-						newPR := tektonv1beta1.PipelineRun{
-							ObjectMeta: ctrl.ObjectMeta{
-								GenerateName: pipelineName + "-retry-",
-								Namespace:    pipelineNS,
-							},
-							Spec: tektonv1beta1.PipelineRunSpec{
-								PipelineRef: &tektonv1beta1.PipelineRef{Name: pipelineName},
-								// Podríamos pasar mismos params que el PR original si queremos reintentar misma commit.
-								// Simplificamos usando misma pipeline con parámetros por defecto o fijos.
-							},
+			// Filtrar por pipeline objetivo
+			if pr.Spec.PipelineRef == nil || pr.Spec.PipelineRef.Name != pipelineName {
+				continue
+			}
+
+			for _, cond := range pr.Status.Conditions {
+				// Si hay una exitosa, resetea el contador
+				if cond.Type == "Succeeded" && cond.Status == corev1.ConditionTrue {
+					if policy.Status.RetryCount != 0 {
+						policy.Status.RetryCount = 0
+						if err := r.Status().Update(ctx, &policy); err != nil {
+							_ = r.Update(ctx, &policy) // fallback si no hay subresource status
 						}
-						if err := r.Create(ctx, &newPR); err != nil {
-							fmt.Printf("Error re-creando PipelineRun: %v\n", err)
-						} else {
-							fmt.Printf("[HealingPolicy] Reejecutada PipelineRun nueva: %s\n", newPR.Name)
+						fmt.Printf("[HealingPolicy] Éxito detectado; RetryCount=0 para %s/%s\n", policy.Namespace, policy.Name)
+					}
+				}
+
+				// Si falló, intenta reintentar (respetando el límite)
+				if cond.Type == "Succeeded" && cond.Status == corev1.ConditionFalse {
+					if policy.Status.RetryCount >= maxRetries {
+						continue
+					}
+
+					newPR := tektonv1beta1.PipelineRun{
+						ObjectMeta: metav1.ObjectMeta{
+							GenerateName: pipelineName + "-retry-",
+							Namespace:    pipelineNS,
+						},
+						Spec: tektonv1beta1.PipelineRunSpec{
+							PipelineRef: &tektonv1beta1.PipelineRef{Name: pipelineName},
+						},
+					}
+					if err := r.Create(ctx, &newPR); err != nil {
+						fmt.Printf("Error re-creando PipelineRun: %v\n", err)
+					} else {
+						policy.Status.RetryCount++
+						if err := r.Status().Update(ctx, &policy); err != nil {
+							_ = r.Update(ctx, &policy)
 						}
+						fmt.Printf("[HealingPolicy] Reintento #%d -> PR %s creado\n", policy.Status.RetryCount, newPR.Name)
 					}
 				}
 			}
 		}
 	}
 
-	// 4. Obtener métricas actuales del microservicio desde Prometheus o directamente vía HTTP
+	// 5) Métricas del servicio (latencia/errores) — opcional en la demo
 	metricsURL := fmt.Sprintf("http://%s.%s.svc:8080/metrics", deployName, deployNS)
-	resp, err := http.Get(metricsURL)
-	if err != nil {
-		fmt.Printf("No se pudo obtener métricas de %s: %v\n", metricsURL, err)
-	} else {
+	if resp, err := http.Get(metricsURL); err == nil {
 		defer resp.Body.Close()
 		body, _ := ioutil.ReadAll(resp.Body)
 		metricsText := string(body)
-		// 5. Parsear métricas relevantes
+
 		totalReq := parseMetricValue(metricsText, "demo_requests_total")
 		totalErr := parseMetricValue(metricsText, "demo_errors_total")
 		lastLat := parseMetricValue(metricsText, "demo_last_request_duration_seconds")
@@ -108,36 +133,40 @@ func (r *HealingPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if totalReq > 0 {
 			currentErrorRate = totalErr / totalReq
 		}
-
-		fmt.Printf("[HealingPolicy] Métricas actuales -> requests: %.0f, errors: %.0f, lastLatency: %.3fs, errorRate: %.2f%%\n",
+		fmt.Printf("[HealingPolicy] Métricas -> req: %.0f, err: %.0f, latency: %.3fs, errRate: %.2f%%\n",
 			totalReq, totalErr, lastLat, currentErrorRate*100)
-
-		// 6. Verificar umbral de latencia
-		if hp.LatencyThresholdSeconds > 0 && lastLat > hp.LatencyThresholdSeconds {
-			// Necesario escalar
-			var deploy appsv1.Deployment
-			if err := r.Get(ctx, client.ObjectKey{Name: deployName, Namespace: deployNS}, &deploy); err == nil {
-				// Aumentar replicas en 1 (también podríamos duplicar, o usar un max definido)
-				desired := *deploy.Spec.Replicas + 1
-				deploy.Spec.Replicas = &desired
-				if err := r.Update(ctx, &deploy); err != nil {
-					fmt.Printf("Error escalando deployment: %v\n", err)
-				} else {
-					fmt.Printf("[HealingPolicy] Latencia %.3fs > %.3fs umbral. Réplicas de %s escaladas a %d\n",
-						lastLat, hp.LatencyThresholdSeconds, deployName, desired)
-				}
-			}
-		}
-
-		// 7. Verificar umbral de error rate (SLO de errores)
-		if hp.ErrorRateThreshold > 0 && currentErrorRate > hp.ErrorRateThreshold {
-			// Enviar alerta (aquí simulamos con un log)
-			fmt.Printf("[HealingPolicy][ALERTA] Tasa de error actual %.2f%% excede umbral de %.2f%%\n",
-				currentErrorRate*100, hp.ErrorRateThreshold*100)
-			// (Opcional: también podríamos escalar el Deployment en caso de alto error rate)
-		}
 	}
 
-	// 8. Programar próxima reconciliación periódica (por ejemplo en 30s) para seguir monitoreando continuamente
+	// 6) Requeue periódico
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func (r *HealingPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&demov1alpha1.HealingPolicy{}).
+		Owns(&tektonv1beta1.PipelineRun{}).
+		Complete(r)
+}
+
+func main() {
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	// Registrar esquemas (fail-fast)
+	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(appsv1.AddToScheme(scheme))
+	utilruntime.Must(tektonv1beta1.AddToScheme(scheme))
+	utilruntime.Must(demov1alpha1.AddToScheme(scheme))
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{Scheme: scheme})
+	if err != nil {
+		panic(fmt.Sprintf("unable to start manager: %v", err))
+	}
+
+	if err := (&HealingPolicyReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		panic(fmt.Sprintf("unable to create controller: %v", err))
+	}
+
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		panic(fmt.Sprintf("problem running manager: %v", err))
+	}
 }

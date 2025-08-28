@@ -2,11 +2,11 @@ apiVersion: demo.kcd2025/v1alpha1
 kind: HealingPolicy
 metadata:
   name: demo-healingpolicy
-  namespace: demokcd2025
+  namespace: healing-operator
 spec:
   pipelineName: "demo-pipeline"
-  pipelineNamespace: "default"
+  pipelineNamespace: "tekton-pipelines"
   deploymentName: "demo-microservice"
-  deploymentNamespace: "default"
+  deploymentNamespace: "demokcd2025"
   latencyThresholdSeconds: 0.5      # 500 ms umbral de latencia
   errorRateThreshold: 0.1           # 10% de errores como umbral
