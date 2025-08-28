@@ -20,7 +20,7 @@ jobs:
             -H "X-GitHub-Event: push" \
             --data '{
               "ref": "refs/heads/main",
-              "after": "0000000000000000000000000000000000000000",
+              "after": "main",
               "repository": {
                 "clone_url": "https://github.com/samircastro27/ci-cd-autocurable.git"
               }
