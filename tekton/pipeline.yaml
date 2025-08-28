@@ -61,8 +61,6 @@ spec:
     workspaces:
     - name: source
       workspace: shared-workspace
-    - name: dockerconfig
-      workspace: shared-workspace   # (opcional, si se requiere credencial Docker)
     params:
     - name: IMAGE
       value: $(params.image-name)   # nombre de la imagen (incluye registro/tag)
@@ -143,4 +141,8 @@ spec:
       volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker
+  volumes:
+    - name: docker-config
+      secret:
+        secretName: docker-config
 ---
