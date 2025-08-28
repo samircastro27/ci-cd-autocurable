@@ -15,7 +15,7 @@ jobs:
 
       - name: Simular Webhook de GitHub
         run: |
-          curl -X POST https://1fcbe53f824a.ngrok-free.app \
+          curl -X POST https://46ccd5baae67.ngrok-free.app \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: push" \
             --data '{

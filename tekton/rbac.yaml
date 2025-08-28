@@ -14,7 +14,12 @@ rules:
     resources: ["pipelineruns"]
     verbs: ["create", "get", "list"]
   - apiGroups: ["triggers.tekton.dev"]
-    resources: ["eventlisteners"]
+    resources:
+    - eventlisteners
+    - triggertemplates
+    - triggerbindings
+    - interceptors
+    - triggers
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -54,4 +59,27 @@ subjects:
 roleRef:
   kind: Role
   name: tekton-deployer
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tekton-triggers-clusterrole
+rules:
+- apiGroups: ["triggers.tekton.dev"]
+  resources: ["clustertriggerbindings", "clusterinterceptors"]
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tekton-triggers-clusterbinding
+subjects:
+- kind: ServiceAccount
+  name: tekton-triggers-sa
+  namespace: tekton-pipelines
+roleRef:
+  kind: ClusterRole
+  name: tekton-triggers-clusterrole
   apiGroup: rbac.authorization.k8s.io

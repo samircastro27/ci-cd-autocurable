@@ -38,7 +38,7 @@ spec:
       - name: git-revision
         value: $(tt.params.gitrevision)
       - name: image-name
-        value: "localhost:32000/demo-microservice:latest"
+        value: "cuembybot/demo-microservice:latest"
       workspaces:
       - name: shared-workspace
         volumeClaimTemplate:
@@ -58,11 +58,11 @@ spec:
   triggers:
   - name: github-trigger
     interceptors:
-    - github:
-        secretRef:
-          secretName: github-webhook-secret   # Referencia a un Secret con la clave del webhook (X-Hub-Signature)
-          secretKey: secretToken
-        eventTypes: ["push", "pull_request"]  # Tipos de eventos GitHub a los que reaccionar
+      - ref:
+          name: "cel"
+        params:
+          - name: "filter"
+            value: "header.match('X-GitHub-Event', 'push')"
     bindings:
       - ref: tb-github
     template:
