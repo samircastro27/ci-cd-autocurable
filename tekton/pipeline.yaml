@@ -98,6 +98,7 @@ metadata:
 type: kubernetes.io/dockerconfigjson
 data:
   .dockerconfigjson: ewogICJhdXRocyI6IHsKICAgICJodHRwczovL2luZGV4LmRvY2tlci5pby92MS8iOiB7CiAgICAgICJ1c2VybmFtZSI6ICJjdWVtYnlib3QiLAogICAgICAicGFzc3dvcmQiOiAiNkpYVGRWbWIyUiMyYTRHJjNEKSp1VnEleUhkQTt4VTciLAogICAgICAiYXV0aCI6ICJZM1ZsYldKNVltOTBPalpLV0ZSa1ZtMWlNbElqTW1FMFJ5WXpSQ2txZFZaeEpYbElaRUU3ZUZVMyIKICAgIH0KICB9Cn0=
+  configjson: ewogICJhdXRocyI6IHsKICAgICJodHRwczovL2luZGV4LmRvY2tlci5pby92MS8iOiB7CiAgICAgICJ1c2VybmFtZSI6ICJjdWVtYnlib3QiLAogICAgICAicGFzc3dvcmQiOiAiNkpYVGRWbWIyUiMyYTRHJjNEKSp1VnEleUhkQTt4VTciLAogICAgICAiYXV0aCI6ICJZM1ZsYldKNVltOTBPalpLV0ZSa1ZtMWlNbElqTW1FMFJ5WXpSQ2txZFZaeEpYbElaRUU3ZUZVMyIKICAgIH0KICB9Cn0=
 
 ---
 apiVersion: v1
@@ -131,7 +132,7 @@ spec:
       workingDir: /workspace/source
       env:
         - name: DOCKER_CONFIG
-          value: /workspace/dockerconfig
+          value: /kaniko/.docker
       command:
         - /kaniko/executor
       args:
@@ -139,4 +140,11 @@ spec:
         - "--context=/workspace/source/microservice"
         - "--destination=$(params.IMAGE)"
         - "--digest-file=/tekton/results/IMAGE_DIGEST"
+      volumeMounts:
+        - name: docker-config
+          mountPath: /kaniko/.docker
+  volumes:
+    - name: docker-config
+      secret:
+        secretName: docker-config
 ---
