@@ -61,6 +61,8 @@ spec:
     workspaces:
     - name: source
       workspace: shared-workspace
+    - name: dockerconfig
+      workspace: shared-workspace
     params:
     - name: IMAGE
       value: $(params.image-name)   # nombre de la imagen (incluye registro/tag)
@@ -99,16 +101,6 @@ data:
   configjson: ewogICJhdXRocyI6IHsKICAgICJodHRwczovL2luZGV4LmRvY2tlci5pby92MS8iOiB7CiAgICAgICJ1c2VybmFtZSI6ICJjdWVtYnlib3QiLAogICAgICAicGFzc3dvcmQiOiAiNkpYVGRWbWIyUiMyYTRHJjNEKSp1VnEleUhkQTt4VTciLAogICAgICAiYXV0aCI6ICJZM1ZsYldKNVltOTBPalpLV0ZSa1ZtMWlNbElqTW1FMFJ5WXpSQ2txZFZaeEpYbElaRUU3ZUZVMyIKICAgIH0KICB9Cn0=
 
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: tekton-pipelines
-  namespace: tekton-pipelines
-secrets:
-  - name: docker-config
-imagePullSecrets:
-  - name: docker-config
----
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
@@ -145,4 +137,14 @@ spec:
     - name: docker-config
       secret:
         secretName: docker-config
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tekton-pipelines
+  namespace: tekton-pipelines
+secrets:
+  - name: docker-config
+imagePullSecrets:
+  - name: docker-config
 ---
